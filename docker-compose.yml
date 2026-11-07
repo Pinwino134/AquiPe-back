@@ -1,0 +1,15 @@
+# Solo la base de datos. La primera vez crea todas las tablas con sql/aquipe_db.sql.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: aquipe
+      POSTGRES_PASSWORD: aquipe
+      POSTGRES_DB: aquipe
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/aquipe_db.sql:/docker-entrypoint-initdb.d/01_aquipe_db.sql:ro
+volumes:
+  pgdata:
