@@ -7,14 +7,14 @@ from sqlalchemy.exc import DBAPIError
 
 from .config import CORS_ORIGINS
 from .database import engine
-from .routers import acuerdos, auth, catalogos, publicaciones, respuestas, usuarios
+from .routers import acuerdos, auth, catalogos, publicaciones, recursos, respuestas, usuarios
 
 app = FastAPI(
     title="AquiPe API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
-        "Backend de AquiPe (hackatón). **Autenticación sin tokens**: haz login en `/auth/login`, "
-        "copia el `id` del usuario y pégalo en **Authorize** (header `X-User-Id`)."
+        "Backend de AquiPe (hackatón). Soporta autenticación segura con Bearer Token firmado "
+        "(HMAC-SHA256) devuelto en `/auth/login` y compatibilidad con header `X-User-Id`."
     ),
 )
 
@@ -25,6 +25,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def agregar_cabeceras_seguridad(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 for r in (
     auth.router,
     usuarios.router,
@@ -32,6 +42,7 @@ for r in (
     publicaciones.router,
     respuestas.router,
     acuerdos.router,
+    recursos.router,
 ):
     app.include_router(r)
 

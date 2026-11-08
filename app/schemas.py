@@ -119,6 +119,7 @@ class UsuarioOut(UsuarioResumen):
     notificaciones_activas: bool
     perfil_proveedor: PerfilProveedorOut | None
     created_at: datetime
+    access_token: str | None = None
 
 
 class UsuarioPublico(UsuarioResumen):
@@ -325,3 +326,43 @@ class ResenaOut(ORM):
     comentario: str | None
     created_at: datetime
     autor: UsuarioResumen
+
+
+class CalificarServicioIn(BaseModel):
+    calificacion: int = Field(ge=1, le=5)
+    comentario: str | None = Field(None, max_length=400)
+    etiquetas: list[str] = Field(default_factory=list, max_length=5)
+
+
+class CalificarServicioOut(BaseModel):
+    resena: ResenaOut
+    calificacion_promedio: float
+    total_resenas: int
+    visto_bueno_vecinal: bool
+
+
+class RecursoCreate(BaseModel):
+    nombre: str = Field(min_length=1, max_length=100)
+    descripcion: str | None = Field(None, max_length=300)
+    cantidad: int = Field(1, gt=0)
+    unidad: str | None = Field(None, max_length=30)
+    disponible: bool = True
+
+
+class RecursoUpdate(BaseModel):
+    nombre: str | None = Field(None, min_length=1, max_length=100)
+    descripcion: str | None = Field(None, max_length=300)
+    cantidad: int | None = Field(None, gt=0)
+    unidad: str | None = Field(None, max_length=30)
+    disponible: bool | None = None
+
+
+class RecursoOut(ORM):
+    id: uuid.UUID
+    usuario_id: uuid.UUID
+    nombre: str
+    descripcion: str | None
+    cantidad: int
+    unidad: str | None
+    disponible: bool
+    created_at: datetime

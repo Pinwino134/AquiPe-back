@@ -8,16 +8,32 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..enums import DireccionPublicacion, EstadoPublicacion, TipoPublicacion
+from ..enums import (
+    DireccionPublicacion,
+    EstadoAcuerdo,
+    EstadoPublicacion,
+    EstadoRespuesta,
+    TipoPublicacion,
+)
 from ..models import (
+    Acuerdo,
     Categoria,
     DetalleEmergencia,
     DetalleServicio,
     Publicacion,
+    Resena,
+    Respuesta,
     Usuario,
     Zona,
 )
-from ..schemas import PublicacionCreate, PublicacionOut, PublicacionUpdate
+from ..schemas import (
+    CalificarServicioIn,
+    CalificarServicioOut,
+    PublicacionCreate,
+    PublicacionOut,
+    PublicacionUpdate,
+    ResenaOut,
+)
 
 router = APIRouter(prefix="/publicaciones", tags=["Publicaciones"])
 
@@ -235,3 +251,116 @@ def eliminar_publicacion(
     p.deleted_at = datetime.now(timezone.utc)
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/{pub_id}/resenas", response_model=list[ResenaOut])
+def resenas_de_publicacion(
+    pub_id: uuid.UUID,
+    yo: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Devuelve las reseñas y Vistos Buenos Vecinales recibidos por el proveedor de la publicación."""
+    p = _cargar(db, pub_id)
+    consulta = (
+        select(Resena)
+        .where(Resena.destinatario_id == p.autor_id)
+        .order_by(Resena.created_at.desc())
+        .limit(30)
+    )
+    return db.scalars(consulta).unique().all()
+
+
+@router.post("/{pub_id}/calificar", response_model=CalificarServicioOut, status_code=201)
+def calificar_publicacion(
+    pub_id: uuid.UUID,
+    datos: CalificarServicioIn,
+    yo: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Califica un servicio o favor y otorga el 'Visto Bueno Vecinal'.
+    Crea o completa automáticamente el acuerdo asociado para activar el trigger
+    de reputación de PostgreSQL (`trg_resena_reputacion`)."""
+    p = _cargar(db, pub_id)
+    if p.autor_id == yo.id:
+        raise HTTPException(409, "No puedes calificar tu propio servicio")
+
+    # Formatear etiquetas de Visto Bueno Vecinal dentro del comentario
+    etiquetas_limpias = [e.strip() for e in datos.etiquetas if e and e.strip()][:5]
+    prefijo = f"[{' · '.join(etiquetas_limpias)}] " if etiquetas_limpias else ""
+    texto_base = (datos.comentario or "Recomendado por vecino de la zona.").strip()
+    comentario_final = f"{prefijo}{texto_base}"[:500]
+
+    # 1. Buscar o crear Respuesta entre yo y la publicación
+    resp = db.scalar(
+        select(Respuesta).where(
+            Respuesta.publicacion_id == p.id,
+            Respuesta.usuario_id == yo.id,
+        )
+    )
+    if resp is None:
+        resp = Respuesta(
+            publicacion_id=p.id,
+            usuario_id=yo.id,
+            mensaje="Contacto y atención vecinal verificada.",
+            estado=EstadoRespuesta.ENVIADA,
+        )
+        db.add(resp)
+        db.flush()
+
+    if resp.estado != EstadoRespuesta.ACEPTADA:
+        resp.estado = EstadoRespuesta.ACEPTADA
+        db.flush()
+
+    # 2. Buscar o crear Acuerdo COMPLETADO
+    acuerdo = db.scalar(select(Acuerdo).where(Acuerdo.respuesta_id == resp.id))
+    ahora = datetime.now(timezone.utc)
+    if acuerdo is None:
+        solicita = p.direccion == DireccionPublicacion.SOLICITA
+        acuerdo = Acuerdo(
+            publicacion_id=p.id,
+            respuesta_id=resp.id,
+            solicitante_id=p.autor_id if solicita else yo.id,
+            proveedor_id=yo.id if solicita else p.autor_id,
+            estado=EstadoAcuerdo.COMPLETADO,
+            completado_at=ahora,
+        )
+        db.add(acuerdo)
+        db.flush()
+    elif acuerdo.estado != EstadoAcuerdo.COMPLETADO:
+        acuerdo.estado = EstadoAcuerdo.COMPLETADO
+        acuerdo.completado_at = ahora
+        db.flush()
+
+    # 3. Buscar o crear Resena (activa trg_resena_reputacion en PostgreSQL)
+    resena = db.scalar(
+        select(Resena).where(
+            Resena.acuerdo_id == acuerdo.id,
+            Resena.autor_id == yo.id,
+        )
+    )
+    if resena is None:
+        resena = Resena(
+            acuerdo_id=acuerdo.id,
+            autor_id=yo.id,
+            destinatario_id=p.autor_id,
+            calificacion=datos.calificacion,
+            comentario=comentario_final,
+        )
+        db.add(resena)
+    else:
+        resena.calificacion = datos.calificacion
+        resena.comentario = comentario_final
+
+    db.commit()
+    db.refresh(resena)
+
+    autor_actualizado = db.get(Usuario, p.autor_id)
+    promedio = float(autor_actualizado.calificacion_promedio) if autor_actualizado else float(datos.calificacion)
+    total = int(autor_actualizado.total_resenas) if autor_actualizado else 1
+
+    return CalificarServicioOut(
+        resena=ResenaOut.model_validate(resena),
+        calificacion_promedio=promedio,
+        total_resenas=total,
+        visto_bueno_vecinal=promedio >= 4.0 and total >= 1,
+    )
