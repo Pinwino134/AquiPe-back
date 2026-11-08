@@ -104,6 +104,18 @@ class PerfilProveedor(Base):
     verificado: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
 
+class Recurso(Base):
+    __tablename__ = "recurso"
+    id: Mapped[uuid.UUID] = pk_uuid()
+    usuario_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("usuario.id"))
+    nombre: Mapped[str] = mapped_column(String(100))
+    descripcion: Mapped[str | None] = mapped_column(String(300))
+    cantidad: Mapped[int] = mapped_column(Integer, default=1)
+    unidad: Mapped[str | None] = mapped_column(String(30))
+    disponible: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = ts_creado()
+
+
 class Publicacion(Base):
     __tablename__ = "publicacion"
     id: Mapped[uuid.UUID] = pk_uuid()

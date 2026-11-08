@@ -1,8 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..auth import hashear_password, verificar_password
+from ..auth import (
+    crear_access_token,
+    hashear_password,
+    registrar_intento_login,
+    verificar_bloqueo_login,
+    verificar_password,
+)
 from ..database import get_db
 from ..enums import EstadoUsuario
 from ..models import Usuario, Zona
@@ -36,16 +42,26 @@ def registro(datos: RegistroIn, db: Session = Depends(get_db)):
     db.add(usuario)
     db.commit()
     db.refresh(usuario)
-    return usuario
+    salida = UsuarioOut.model_validate(usuario)
+    salida.access_token = crear_access_token(usuario.id)
+    return salida
 
 
 @router.post("/login", response_model=UsuarioOut)
-def login(datos: LoginIn, db: Session = Depends(get_db)):
-    """Valida correo y contraseña y devuelve el usuario. Sin tokens: el frontend debe guardar
-    `id` y enviarlo como header `X-User-Id` en las demás peticiones."""
+def login(datos: LoginIn, request: Request, db: Session = Depends(get_db)):
+    """Valida correo y contraseña y devuelve el usuario con su `access_token` firmado."""
+    ip = request.client.host if request.client else "local"
+    clave_intento = f"{ip}:{datos.correo.lower()}"
+    verificar_bloqueo_login(clave_intento)
+
     usuario = db.scalar(select(Usuario).where(func.lower(Usuario.correo) == datos.correo.lower()))
     if usuario is None or not verificar_password(datos.password, usuario.password_hash):
+        registrar_intento_login(clave_intento, exitoso=False)
         raise HTTPException(401, "Correo o contraseña incorrectos")
     if usuario.estado != EstadoUsuario.ACTIVO:
         raise HTTPException(403, "La cuenta no está activa")
-    return usuario
+
+    registrar_intento_login(clave_intento, exitoso=True)
+    salida = UsuarioOut.model_validate(usuario)
+    salida.access_token = crear_access_token(usuario.id)
+    return salida
